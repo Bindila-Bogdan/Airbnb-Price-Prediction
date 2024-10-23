@@ -1,24 +1,87 @@
 ---
 title: "Airbnb Price Prediction"
-subtitle: Bogdan Bindila 3264424
+subtitle: Mihai-Bogdan Bîndilă 3264424
 output:
   html_document:
     df_print: paged
 ---
 
-```{r setup, include=FALSE}
+```{r import_packages, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 
 library(conflicted)
 library(tidyverse)
+library(rsample)
+library(randomForestSRC)
+library(caret)
 ```
 
-```{r}
-data <- read_delim(
+### Problem description
+
+### Data description
+
+```{r load_data}
+data_weekdays <- read_delim(
   file = "./data/amsterdam_weekdays.csv",
   delim = ",",
   col_names = TRUE,
   show_col_types = FALSE
 )
+data_weekends <- read_delim(
+  file = "./data/amsterdam_weekends.csv",
+  delim = ",",
+  col_names = TRUE,
+  show_col_types = FALSE
+)
+data <- bind_rows(data_weekdays, data_weekends)
 data
 ```
+
+```{r factor_categorical_features}
+data <- data %>%
+  mutate(room_type = factor(room_type)) %>%
+  mutate(room_shared = factor(room_shared)) %>%
+  mutate(room_private = factor(room_private))
+```
+
+### Data visualization
+
+### Data cleaning
+
+### Feature engineering
+
+### Modeling
+
+```{r data_splitting, warning=FALSE}
+set.seed(20)
+
+dataset_splitter <- initial_split(data, prop = 0.8)
+train_data <- as.data.frame(training(dataset_splitter))
+test_data <- as.data.frame(testing(dataset_splitter))
+```
+
+```{r modeling}
+rf_model <- rfsrc(realSum ~ ., data = as.data.frame(data), importance = TRUE, )
+rf_model
+
+predictions <- predict(rf_model, newdata = test_data)
+rsq <- function (x, y)
+  cor(x, y) ^ 2
+rf_model
+
+rsq(predictions$predicted, test_data$realSum)
+sqrt(mean((
+  test_data$realSum - predictions$predicted
+) ^ 2))
+
+control <- trainControl(method = "cv", number = 3)
+rf_model <- train(realSum ~ .,
+                  data = data,
+                  method = "rf",
+                  trControl = control)
+rf_model
+```
+
+### Final model
+
+### Reflection
