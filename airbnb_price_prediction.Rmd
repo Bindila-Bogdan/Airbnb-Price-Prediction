@@ -1,0 +1,24 @@
+---
+title: "Airbnb Price Prediction"
+subtitle: Bogdan Bindila 3264424
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(conflicted)
+library(tidyverse)
+```
+
+```{r}
+data <- read_delim(
+  file = "./data/amsterdam_weekdays.csv",
+  delim = ",",
+  col_names = TRUE,
+  show_col_types = FALSE
+)
+data
+```
