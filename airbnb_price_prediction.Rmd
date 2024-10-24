@@ -37,6 +37,9 @@ data <- bind_rows(data_weekdays, data_weekends)
 data
 ```
 
+
+### Data preprocessing
+
 ```{r factor_categorical_features}
 data <- data %>%
   mutate(room_type = factor(room_type)) %>%
@@ -44,13 +47,22 @@ data <- data %>%
   mutate(room_private = factor(room_private))
 ```
 
-### Data visualization
-
 ### Data cleaning
+- drop features w/o variance or unimportant
+- check is there are missing values
+
+### Data visualization
+- check if there are outliers
 
 ### Feature engineering
+- feature selection
 
 ### Modeling
+- train
+- optimize
+- validate
+- interpret weights / feature importance
+- perform statistical tests
 
 ```{r data_splitting, warning=FALSE}
 set.seed(20)
