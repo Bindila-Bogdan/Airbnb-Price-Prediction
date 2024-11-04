@@ -12,8 +12,9 @@ knitr::opts_chunk$set(echo = TRUE)
 library(conflicted)
 library(tidyverse)
 library(rsample)
-library(randomForestSRC)
 library(caret)
+library(MASS)
+library(randomForest)
 ```
 
 ### Problem description
@@ -47,6 +48,9 @@ data_weekends <- read_delim(
   show_col_types = FALSE
 )
 complete_data <- bind_rows(data_weekdays, data_weekends)
+
+# TODO: remove this
+complete_data <- head(complete_data, 100)
 complete_data
 ```
 
@@ -69,7 +73,6 @@ complete_data <- complete_data %>%
 
 ```{r data_cleaning}
 data <- subset(complete_data, select = -c(...1, attr_index, rest_index))
-data
 
 data <- rename(
   data,
@@ -83,7 +86,8 @@ data <- rename(
   restaurants_index = rest_index_norm,
   longitude = lng,
   latitude = lat,
-  capacity = person_capacity
+  capacity = person_capacity,
+  bedrooms_no = bedrooms
 )
 
 
@@ -121,8 +125,64 @@ test_data <- as.data.frame(testing(dataset_splitter))
 ```
 
 ```{r modeling}
-rf_model <- rfsrc(price ~ ., data = as.data.frame(data), importance = TRUE, )
+
+# aet up the control parameters for RFE
+control <- rfeControl(method = "cv",
+                      number = 5,
+                      saveDetails = TRUE)
+
+# perform RFE
+results <- rfe(
+  price ~ .,
+  data = as.data.frame(data),
+  sizes = seq(10, 12),
+  method = "rf",
+  metric = "RMSE",
+  rfeControl = control
+)
+
+results
+predictors(results)
+plot(results)
+
+selected_features <- ""
+
+for (feature in colnames(data)) {
+  for (important_feature in predictors(results)){
+    if (grepl(feature, important_feature)) {
+      print(paste(feature, important_feature))
+      selected_features <- paste(formula, feature, sep = " + ")
+      break
+  } 
+  }
+}
+
+formula <- as.formula(paste("price ~", substr(selected_features, 4, nchar(selected_features))))
+formula
+
+ggplot(data = results, metric = "RMSE") + 
+  theme_minimal() +
+  labs(title = "Cross-validation RMSE for each best subset of features", x = "Variables", y = "RMSE")
+
+
+rf_model <- randomForest(formula,  data = data,  importance=TRUE)
+importance(rf_model)
 rf_model
+
+# tune the hyperparameters
+optimization_control <- trainControl(method='cv', number=5)
+
+tune_grid <- expand.grid(.mtry = c(2, 4, 6, 8))
+# TODO: tune other parameters outside the loop
+
+rf_optimized <- train(formula, 
+                    data=data, 
+                    method='rf', 
+                    metric='RMSE', 
+                    tuneGrid=tune_grid, 
+                    trControl=optimization_control)
+rf_optimized
+
 
 predictions <- predict(rf_model, newdata = test_data)
 rsq <- function (x, y)
@@ -137,7 +197,7 @@ sqrt(mean((
 control <- trainControl(method = "cv", number = 3)
 rf_model <- train(price ~ .,
                   data = data,
-                  method = "rf",
+                  method = "glm",
                   trControl = control)
 rf_model
 ```
@@ -145,18 +205,21 @@ rf_model
 ### Final model
 
 ```{r final_model}
-rf_final_model <- rfsrc(price ~ ., data = as.data.frame(data), importance = TRUE)
-rf_final_model
+rf_final_model <- randomForest(price ~ .,  data = data,  importance=TRUE)
 
-feature_importance <- as.data.frame(rf_final_model$importance) %>%
-  rename("importance" = "rf_final_model$importance")
-feature_importance$importance  <- rf_final_model$importance / sum(feature_importance$importance) * 100
+feature_importance <- as.data.frame(importance(rf_final_model)) %>%
+  rename("importance" = "IncNodePurity")
+feature_importance
+feature_importance$importance  <- feature_importance$importance / sum(feature_importance$importance) * 100
 feature_importance <-  feature_importance %>% arrange(desc(importance))
+feature_importance
 
-ggplot(feature_importance, aes(x  = rownames(feature_importance), y = importance)) +
-  geom_bar(stat = "identity", fill = "#FF5A5F") +
+ggplot(feature_importance, aes(x  = rownames(feature_importance), y = importance, fill = importance)) +
+  geom_bar(stat = "identity") +
+  scale_fill_gradient(low = "#767676", high = "#FF5A5F")+
   labs(title = "Scaled Feature Importance", x = "Feature", y = "Importance") +
   theme_minimal() +
+  guides(fill="none") + 
   scale_y_continuous(breaks = seq(0, 100, by = 5),
                      labels = seq(0, 100, by = 5),) +
   scale_x_discrete(limits = rownames(feature_importance)) +
