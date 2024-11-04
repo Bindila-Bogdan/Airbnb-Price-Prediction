@@ -18,7 +18,20 @@ library(caret)
 
 ### Problem description
 
+The number of listings on Airbnb has recorded a [steady increase](https://www.businessofapps.com/data/airbnb-statistics/), from 300,000 in 2013 to 7.7 million in 2023. This project aims to leverage this rich data to identify key factors influencing nightly rental prices. With a focus on Amsterdam as a case study, we will build a predictive model to estimate these prices. The developed model will be integrated into a web application designed for two user groups: 
+
+**Owners:** Gain insights into optimal pricing strategies based on property characteristics and potential guest ratings. \
+**Guests:** Assess the fairness of listed prices and explore price variations across different locations for similar properties.
+
 ### Data description
+
+It contains the following features that will be used to predict the price per night (realSum): \
+**- property characteristics:** type of room, private or shared, capacity, number of bedrooms, for business purposes or not \
+**- data from Tripadvisor:** accessibility to attractions and restaurants within the neighborhood of the property \
+**- location:** longitude, latitude, distance from the city center and from the nearest metro station \
+**- ratings:** cleanliness and guest satisfaction scores \
+**- host:** is super host or not
+
 
 ```{r load_data}
 data_weekdays <- read_delim(
@@ -33,26 +46,61 @@ data_weekends <- read_delim(
   col_names = TRUE,
   show_col_types = FALSE
 )
-data <- bind_rows(data_weekdays, data_weekends)
-data
+complete_data <- bind_rows(data_weekdays, data_weekends)
+complete_data
 ```
 
 
 ### Data preprocessing
 
 ```{r factor_categorical_features}
-data <- data %>%
+complete_data <- complete_data %>%
   mutate(room_type = factor(room_type)) %>%
   mutate(room_shared = factor(room_shared)) %>%
-  mutate(room_private = factor(room_private))
+  mutate(room_private = factor(room_private)) %>%
+  mutate(host_is_superhost = factor(host_is_superhost)) %>%
+  mutate(multi = factor(multi)) %>%
+  mutate(biz = factor(biz))
 ```
 
 ### Data cleaning
 - drop features w/o variance or unimportant
 - check is there are missing values
 
+```{r data_cleaning}
+data <- subset(complete_data, select = -c(...1, attr_index, rest_index))
+data
+
+data <- rename(
+  data,
+  price = realSum,
+  business_room = biz,
+  is_superhost = host_is_superhost,
+  multiple_rooms = multi,
+  satisfaction_rating = guest_satisfaction_overall,
+  center_dist = dist,
+  attractions_index = attr_index_norm,
+  restaurants_index = rest_index_norm,
+  longitude = lng,
+  latitude = lat,
+  capacity = person_capacity
+)
+
+
+data$multiple_rooms <- ifelse(data$multiple_rooms == 0, FALSE, TRUE)
+data$business_room <- ifelse(data$business_room == 0, FALSE, TRUE)
+
+data$cleanliness_rating  <- data$cleanliness_rating * 10
+
+data
+```
+
 ### Data visualization
 - check if there are outliers
+```{r data_visualization}
+
+data
+```
 
 ### Feature engineering
 - feature selection
@@ -65,7 +113,7 @@ data <- data %>%
 - perform statistical tests
 
 ```{r data_splitting, warning=FALSE}
-set.seed(20)
+set.seed(19)
 
 dataset_splitter <- initial_split(data, prop = 0.8)
 train_data <- as.data.frame(training(dataset_splitter))
@@ -73,7 +121,7 @@ test_data <- as.data.frame(testing(dataset_splitter))
 ```
 
 ```{r modeling}
-rf_model <- rfsrc(realSum ~ ., data = as.data.frame(data), importance = TRUE, )
+rf_model <- rfsrc(price ~ ., data = as.data.frame(data), importance = TRUE, )
 rf_model
 
 predictions <- predict(rf_model, newdata = test_data)
@@ -81,13 +129,13 @@ rsq <- function (x, y)
   cor(x, y) ^ 2
 rf_model
 
-rsq(predictions$predicted, test_data$realSum)
+rsq(predictions$predicted, test_data$price)
 sqrt(mean((
-  test_data$realSum - predictions$predicted
+  test_data$price - predictions$predicted
 ) ^ 2))
 
 control <- trainControl(method = "cv", number = 3)
-rf_model <- train(realSum ~ .,
+rf_model <- train(price ~ .,
                   data = data,
                   method = "rf",
                   trControl = control)
@@ -95,5 +143,24 @@ rf_model
 ```
 
 ### Final model
+
+```{r final_model}
+rf_final_model <- rfsrc(price ~ ., data = as.data.frame(data), importance = TRUE)
+rf_final_model
+
+feature_importance <- as.data.frame(rf_final_model$importance) %>%
+  rename("importance" = "rf_final_model$importance")
+feature_importance$importance  <- rf_final_model$importance / sum(feature_importance$importance) * 100
+feature_importance <-  feature_importance %>% arrange(desc(importance))
+
+ggplot(feature_importance, aes(x  = rownames(feature_importance), y = importance)) +
+  geom_bar(stat = "identity", fill = "#FF5A5F") +
+  labs(title = "Scaled Feature Importance", x = "Feature", y = "Importance") +
+  theme_minimal() +
+  scale_y_continuous(breaks = seq(0, 100, by = 5),
+                     labels = seq(0, 100, by = 5),) +
+  scale_x_discrete(limits = rownames(feature_importance)) +
+  coord_flip()
+```
 
 ### Reflection
