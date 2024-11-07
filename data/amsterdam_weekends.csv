@@ -1,4 +1,4 @@
-,realSum,room_type,room_shared,room_private,person_capacity,host_is_superhost,multi,biz,cleanliness_rating,guest_satisfaction_overall,bedrooms,dist,metro_dist,attr_index,attr_index_norm,rest_index,rest_index_norm,lng,lat
+index,realSum,room_type,room_shared,room_private,person_capacity,host_is_superhost,multi,biz,cleanliness_rating,guest_satisfaction_overall,bedrooms,dist,metro_dist,attr_index,attr_index_norm,rest_index,rest_index_norm,lng,lat
 0,319.6400534295691,Private room,False,True,2.0,False,0,1,9.0,88.0,1,4.76335974080673,0.8521173969261567,110.90612328634465,5.87197140434776,136.982207779159,11.941560304263303,4.84639,52.34137
 1,347.9952194596115,Private room,False,True,2.0,False,0,1,9.0,87.0,1,5.748310293271628,3.6515914990858325,75.27593655810635,3.985516162741217,95.38646779321537,8.315410269921582,4.9751199999999995,52.36103
 2,482.97518337121835,Private room,False,True,4.0,False,0,1,9.0,90.0,2,0.38487208614316554,0.43985163027299534,493.2725174909284,26.116521175111636,875.1148174970866,76.28900523448691,4.89417,52.37663
