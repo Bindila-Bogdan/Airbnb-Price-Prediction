@@ -48,9 +48,7 @@ data_weekends <- read_delim(
   show_col_types = FALSE
 )
 complete_data <- bind_rows(data_weekdays, data_weekends)
-
-# TODO: remove this
-complete_data <- head(complete_data, 100)
+write.csv(data, file = "./data/amsterdam_raw.csv", row.names = FALSE)
 complete_data
 ```
 
@@ -58,6 +56,7 @@ complete_data
 ### Data preprocessing
 
 ```{r factor_categorical_features}
+# factor the categorical features
 complete_data <- complete_data %>%
   mutate(room_type = factor(room_type)) %>%
   mutate(room_shared = factor(room_shared)) %>%
@@ -72,8 +71,10 @@ complete_data <- complete_data %>%
 - check is there are missing values
 
 ```{r data_cleaning}
-data <- subset(complete_data, select = -c(...1, attr_index, rest_index))
+# remove redundant features
+data <- subset(complete_data, select = -c(index, attr_index, rest_index, room_private))
 
+# rename features so that their name is more meaningful
 data <- rename(
   data,
   price = realSum,
@@ -90,10 +91,11 @@ data <- rename(
   bedrooms_no = bedrooms
 )
 
-
+# make sure all binary categorical features have the values TRUE and FALSE, instead of numeric values (0 and 1)
 data$multiple_rooms <- ifelse(data$multiple_rooms == 0, FALSE, TRUE)
 data$business_room <- ifelse(data$business_room == 0, FALSE, TRUE)
 
+# scale the cleanliness rating to have the same scale as the satisfaction rating
 data$cleanliness_rating  <- data$cleanliness_rating * 10
 
 data
@@ -101,13 +103,91 @@ data
 
 ### Data visualization
 - check if there are outliers
-```{r data_visualization}
-
-data
-```
 
 ### Feature engineering
 - feature selection
+```{r feature_importance}
+plot_feature_importance <- function(rf_model) {
+  # build the feature importance plot given by the model on the entire dataset
+  feature_importance <- as.data.frame(importance(rf_model)) %>%
+    rename("importance" = "IncNodePurity")
+  feature_importance$importance  <- feature_importance$importance / sum(feature_importance$importance) * 100
+  feature_importance <- feature_importance %>% arrange(desc(importance))
+  
+  ggplot(feature_importance,
+         aes(
+           x  = rownames(feature_importance),
+           y = importance,
+           fill = importance
+         )) +
+    geom_bar(stat = "identity") +
+    scale_fill_gradient(low = "#767676", high = "#FF5A5F") +
+    labs(title = "Scaled Feature Importance", x = "Feature", y = "Importance") +
+    theme_minimal() +
+    guides(fill = "none") +
+    scale_y_continuous(breaks = seq(0, 100, by = 5),
+                       labels = seq(0, 100, by = 5),) +
+    scale_x_discrete(limits = rownames(feature_importance)) +
+    coord_flip()
+}
+```
+
+
+```{r feature_selection, warning=FALSE}
+# ensure results are reproducible
+set.seed(19)
+
+# set up the control parameters for recursive feature elimination
+control <- rfeControl(functions = rfFuncs,
+                      method = "cv",
+                      number = 5,
+                      saveDetails = TRUE)
+
+# perform recursive feature elimination
+rfe_results <- rfe(
+  x = data[, !colnames(data) %in% "price", drop = FALSE],
+  y = data[["price"]],
+  method = "rf",
+  metric = "RMSE",
+  sizes = seq(1:ncol(data)),
+  rfeControl = control,
+  ntree = 100
+)
+
+ggplot(data = rfe_results, metric = "RMSE") +
+  theme_minimal() +
+  labs(title = "Cross-validation RMSE for each best subset of features", x = "Variables", y = "RMSE")
+
+predictors(rfe_results)
+rfe_results$results
+
+# create a formula based on the selected features
+selected_features_list <- c()
+
+for (feature in colnames(data)) {
+  for (important_feature in predictors(rfe_results)) {
+    if (grepl(feature, important_feature)) {
+      selected_features_list <- append(selected_features_list, feature)
+      break
+    }
+  }
+}
+
+# get only the selected features and store the filtered dataset for further use
+selected_features_list <- append(selected_features_list, "price")
+data <- data[, selected_features_list]
+selected_features_list
+
+# retrain the Random Forest with the selected features and then further remove the ones which are not important
+rf_selected_features <- randomForest(price ~., data = data, ntree = 100, importance = TRUE)
+rf_selected_features
+plot_feature_importance(rf_selected_features)
+data <- dplyr::select(data, -"is_superhost", -"business_room", -"cleanliness_rating")
+
+# store the final dataset
+write.csv(data, file = "./data/amsterdam_preprocessed.csv", row.names = FALSE)
+```
+
 
 ### Modeling
 - train
@@ -116,114 +196,55 @@ data
 - interpret weights / feature importance
 - perform statistical tests
 
-```{r data_splitting, warning=FALSE}
-set.seed(19)
 
-dataset_splitter <- initial_split(data, prop = 0.8)
-train_data <- as.data.frame(training(dataset_splitter))
-test_data <- as.data.frame(testing(dataset_splitter))
-```
+```{r modeling_optimization, warning=FALSE}
+# tune the hyperparameters
+optimization_control <- trainControl(method = 'cv', number = 5)
+number_of_features <- ncol(data)
 
-```{r modeling}
+mtry_values <- c(number_of_features,
+                 round(sqrt(number_of_features)),
+                 round(number_of_features / 3))
+ntree_values <- c(64, 100, 128, 500)
+best_rmse <- .Machine$integer.max
 
-# aet up the control parameters for RFE
-control <- rfeControl(method = "cv",
-                      number = 5,
-                      saveDetails = TRUE)
+for (ntree_value in ntree_values) {
+    rf_optimized <- train(
+      price ~ .,
+      data = data,
+      method = 'rf',
+      metric = 'RMSE',
+      ntree = ntree_value,
+      tuneGrid = expand.grid(.mtry = mtry_values),
+      trControl = optimization_control
+    )
 
-# perform RFE
-results <- rfe(
-  price ~ .,
-  data = as.data.frame(data),
-  sizes = seq(10, 12),
-  method = "rf",
-  metric = "RMSE",
-  rfeControl = control
-)
+    rmse <- min(rf_optimized$results$RMSE)
 
-results
-predictors(results)
-plot(results)
-
-selected_features <- ""
-
-for (feature in colnames(data)) {
-  for (important_feature in predictors(results)){
-    if (grepl(feature, important_feature)) {
-      print(paste(feature, important_feature))
-      selected_features <- paste(formula, feature, sep = " + ")
-      break
-  } 
-  }
+    if (best_rmse > rmse) {
+      best_rmse <- rmse
+      best_rf_optimized <- rf_optimized$finalModel
+    }
 }
 
-formula <- as.formula(paste("price ~", substr(selected_features, 4, nchar(selected_features))))
-formula
-
-ggplot(data = results, metric = "RMSE") + 
-  theme_minimal() +
-  labs(title = "Cross-validation RMSE for each best subset of features", x = "Variables", y = "RMSE")
-
-
-rf_model <- randomForest(formula,  data = data,  importance=TRUE)
-importance(rf_model)
-rf_model
-
-# tune the hyperparameters
-optimization_control <- trainControl(method='cv', number=5)
-
-tune_grid <- expand.grid(.mtry = c(2, 4, 6, 8))
-# TODO: tune other parameters outside the loop
-
-rf_optimized <- train(formula, 
-                    data=data, 
-                    method='rf', 
-                    metric='RMSE', 
-                    tuneGrid=tune_grid, 
-                    trControl=optimization_control)
-rf_optimized
-
-
-predictions <- predict(rf_model, newdata = test_data)
-rsq <- function (x, y)
-  cor(x, y) ^ 2
-rf_model
-
-rsq(predictions$predicted, test_data$price)
-sqrt(mean((
-  test_data$price - predictions$predicted
-) ^ 2))
-
-control <- trainControl(method = "cv", number = 3)
-rf_model <- train(price ~ .,
-                  data = data,
-                  method = "glm",
-                  trControl = control)
-rf_model
+best_rmse
+best_rf_optimized
 ```
 
 ### Final model
 
 ```{r final_model}
-rf_final_model <- randomForest(price ~ .,  data = data,  importance=TRUE)
-
-feature_importance <- as.data.frame(importance(rf_final_model)) %>%
-  rename("importance" = "IncNodePurity")
-feature_importance
-feature_importance$importance  <- feature_importance$importance / sum(feature_importance$importance) * 100
-feature_importance <-  feature_importance %>% arrange(desc(importance))
-feature_importance
-
-ggplot(feature_importance, aes(x  = rownames(feature_importance), y = importance, fill = importance)) +
-  geom_bar(stat = "identity") +
-  scale_fill_gradient(low = "#767676", high = "#FF5A5F")+
-  labs(title = "Scaled Feature Importance", x = "Feature", y = "Importance") +
-  theme_minimal() +
-  guides(fill="none") + 
-  scale_y_continuous(breaks = seq(0, 100, by = 5),
-                     labels = seq(0, 100, by = 5),) +
-  scale_x_discrete(limits = rownames(feature_importance)) +
-  coord_flip()
+# get the best params and re-fit the model on the whole dataset, then save it
+rf_final_model <- randomForest(
+  price ~.,
+  data = data,
+  importance = TRUE,
+  mtry = best_rf_optimized$mtry,
+  ntree = best_rf_optimized$ntree,
+)
+rf_final_model
+plot_feature_importance(rf_final_model)
+saveRDS(rf_final_model, file = "./airbnb_price_prediction/rf_model.rds")
 ```
 
 ### Reflection
