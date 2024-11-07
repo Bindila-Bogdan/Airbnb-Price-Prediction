@@ -19,14 +19,14 @@ library(randomForest)
 
 ### Problem description
 
-The number of listings on Airbnb has recorded a [steady increase](https://www.businessofapps.com/data/airbnb-statistics/), from 300,000 in 2013 to 7.7 million in 2023. This project aims to leverage this rich data to identify key factors influencing nightly rental prices. With a focus on Amsterdam as a case study, we will build a predictive model to estimate these prices. The developed model will be integrated into a web application designed for two user groups: 
+The number of Airbnb listings has recorded a [steady increase](https://www.businessofapps.com/data/airbnb-statistics/), from 300,000 in 2013 to 7.7 million in 2023. Hence, this project aims to leverage this rich data to identify key factors influencing nightly rental prices. With a focus on Amsterdam as a case study, we will build a predictive model to estimate these prices. The developed model will be integrated into a web application designed for two user groups: 
 
 **Owners:** Gain insights into optimal pricing strategies based on property characteristics and potential guest ratings. \
 **Guests:** Assess the fairness of listed prices and explore price variations across different locations for similar properties.
 
 ### Data description
 
-It contains the following features that will be used to predict the price per night (realSum): \
+It contains the following features that can be used to predict the price per night (realSum): \
 **- property characteristics:** type of room, private or shared, capacity, number of bedrooms, for business purposes or not \
 **- data from Tripadvisor:** accessibility to attractions and restaurants within the neighborhood of the property \
 **- location:** longitude, latitude, distance from the city center and from the nearest metro station \
@@ -35,6 +35,7 @@ It contains the following features that will be used to predict the price per ni
 
 
 ```{r load_data}
+# load the CSV files, combine them into one data frame and store it in a new CSV
 data_weekdays <- read_delim(
   file = "./data/amsterdam_weekdays.csv",
   delim = ",",
@@ -52,31 +53,16 @@ write.csv(data, file = "./data/amsterdam_raw.csv", row.names = FALSE)
 complete_data
 ```
 
+### Data inspection and preprocessing
 
-### Data preprocessing
+The dataset has **2,080 rows** and **20 columns**.
 
-```{r factor_categorical_features}
-# factor the categorical features
-complete_data <- complete_data %>%
-  mutate(room_type = factor(room_type)) %>%
-  mutate(room_shared = factor(room_shared)) %>%
-  mutate(room_private = factor(room_private)) %>%
-  mutate(host_is_superhost = factor(host_is_superhost)) %>%
-  mutate(multi = factor(multi)) %>%
-  mutate(biz = factor(biz))
-```
+The first step is to increase the readability by renaming the features with more meaningful names
 
-### Data cleaning
-- drop features w/o variance or unimportant
-- check is there are missing values
-
-```{r data_cleaning}
-# remove redundant features
-data <- subset(complete_data, select = -c(index, attr_index, rest_index, room_private))
-
+```{r readability}
 # rename features so that their name is more meaningful
-data <- rename(
-  data,
+complete_data <- rename(
+  complete_data,
   price = realSum,
   business_room = biz,
   is_superhost = host_is_superhost,
@@ -90,18 +76,136 @@ data <- rename(
   capacity = person_capacity,
   bedrooms_no = bedrooms
 )
+```
 
+
+The second step needed for its inspection is represented by the factorization of categorical columns. 
+
+```{r factor_categorical_features}
+# factor the categorical features
+complete_data <- complete_data %>%
+  mutate(room_type = factor(room_type)) %>%
+  mutate(room_shared = factor(room_shared)) %>%
+  mutate(room_private = factor(room_private)) %>%
+  mutate(capacity = factor(capacity)) %>%
+  mutate(is_superhost = factor(is_superhost)) %>%
+  mutate(multiple_rooms = factor(multiple_rooms)) %>%
+  mutate(business_room = factor(business_room)) %>%
+  mutate(bedrooms_no = factor(bedrooms_no))
+```
+
+After that, we can count how many features are categorical and how many are continuous.
+
+```{r count_features}
+# count categorical and continuous columns
+categorical_variables_no <- ncol(complete_data %>% dplyr::select(where(is.factor)))
+continuous_variables_no <- ncol(complete_data %>% dplyr::select(!where(is.factor)))
+```
+
+There are `r categorical_variables_no` categorical columns and `r continuous_variables_no` continuous columns.
+
+### Data cleaning
+
+#### Missing values
+
+After familiarizing with the data, we continue with the data cleaning process. Firstly, we look for missing values. It can be observed that there are **no missing value** in any of the columns. 
+
+```{r missinv_values}
+# count the number of missing values per column
+missing_values <- complete_data %>%
+  summarize(across(everything(), ~ sum(is.na(.x))))
+missing_values
+```
+
+#### Drop redundant columns
+
+Secondly, we should remove redundant features. For example the information from **room_private** is contained in the **room_type** feature, and the columns **attr_index** and **rest_index** already have a scaled version in the dataset.
+
+```{r drop_columns}
+# remove redundant features
+data <- subset(complete_data,
+               select = -c(index, attr_index, rest_index, room_private))
+```
+
+#### Consistency 
+
+In term of consistency, the categorical columns with two classes should contain the same values (TRUE and FALSE), but in our case **multiple_rooms** and **business_room** have the values 0 and 1. Last but not least, the uniformity can be maximized if the ratings from **cleanliness_rating** and **guest_satisfaction_overall** have the same scale.
+
+```{r consistency}
 # make sure all binary categorical features have the values TRUE and FALSE, instead of numeric values (0 and 1)
 data$multiple_rooms <- ifelse(data$multiple_rooms == 0, FALSE, TRUE)
 data$business_room <- ifelse(data$business_room == 0, FALSE, TRUE)
+data <- data %>%
+  mutate(multiple_rooms = factor(multiple_rooms)) %>%
+  mutate(business_room = factor(business_room))
 
 # scale the cleanliness rating to have the same scale as the satisfaction rating
 data$cleanliness_rating  <- data$cleanliness_rating * 10
 
-data
+head(data)
 ```
 
-### Data visualization
+
+### Data Analysis
+
+#### Summary statistics
+
+```{r summary_statistics_continuous}
+continuous_data <- data %>% dplyr::select(!where(is.factor))
+
+data.frame(
+  feature_names = colnames(continuous_data),
+  min = unlist(continuous_data %>% summarize(across(
+    everything(), ~ min(.x)
+  )), use.names = FALSE),
+  lower_bound = unlist(continuous_data %>% summarize(across(
+   everything(), ~ median(.x) - 1.5 * (quantile(.x, 0.75) - quantile(.x, 0.25))
+  )), use.names = FALSE),
+  mean = unlist(continuous_data %>% summarize(across(
+    everything(), ~ mean(.x)
+  )), use.names = FALSE),
+  median = unlist(continuous_data %>% summarize(across(
+    everything(), ~ median(.x)
+  )), use.names = FALSE),
+  upper_bound = unlist(continuous_data %>% summarize(across(
+    everything(), ~ median(.x) + 1.5 * (quantile(.x, 0.75) - quantile(.x, 0.25))
+  )), use.names = FALSE),
+  max = unlist(continuous_data %>% summarize(across(
+    everything(), ~ max(.x)
+  )), use.names = FALSE)
+)
+```
+
+```{r summary_statistics_categorical}
+categorical_data <- data %>% dplyr::select(where(is.factor))
+
+
+get_categorical_frequencies <- function(data, column_name) {
+  categories <- as.data.frame(addmargins(table(categorical_data[[column_name]])))
+  categories <- categories[1:(nrow(categories) - 1),]
+  
+  categories_freq <- NULL
+  
+  for (index in seq(1, length(categories$Var1))){
+    category_freq <- paste(categories$Var1[index], " - ", round(categories$Freq[index] / nrow(data) * 100, 2), "%", sep="")
+    
+    if (is.null(categories_freq)){
+      categories_freq <- category_freq
+    } else {
+      categories_freq <- paste(categories_freq, category_freq, sep="    ")
+    }
+  }
+  
+  return (categories_freq)
+}
+
+get_categorical_frequencies(data, "room_type")
+```
+
+
+- check for outliers
+- statistics for each feature (e.g. for categorical features compute the percentage of classes)
+- visualize features: univriate, bivariate, multivariate
 - check if there are outliers
 
 ### Feature engineering
@@ -134,58 +238,58 @@ plot_feature_importance <- function(rf_model) {
 
 
 ```{r feature_selection, warning=FALSE}
-# ensure results are reproducible
-set.seed(19)
-
-# set up the control parameters for recursive feature elimination
-control <- rfeControl(functions = rfFuncs,
-                      method = "cv",
-                      number = 5,
-                      saveDetails = TRUE)
-
-# perform recursive feature elimination
-rfe_results <- rfe(
-  x = data[, !colnames(data) %in% "price", drop = FALSE],
-  y = data[["price"]],
-  method = "rf",
-  metric = "RMSE",
-  sizes = seq(1:ncol(data)),
-  rfeControl = control,
-  ntree = 100
-)
-
-ggplot(data = rfe_results, metric = "RMSE") +
-  theme_minimal() +
-  labs(title = "Cross-validation RMSE for each best subset of features", x = "Variables", y = "RMSE")
-
-predictors(rfe_results)
-rfe_results$results
-
-# create a formula based on the selected features
-selected_features_list <- c()
-
-for (feature in colnames(data)) {
-  for (important_feature in predictors(rfe_results)) {
-    if (grepl(feature, important_feature)) {
-      selected_features_list <- append(selected_features_list, feature)
-      break
-    }
-  }
-}
-
-# get only the selected features and store the filtered dataset for further use
-selected_features_list <- append(selected_features_list, "price")
-data <- data[, selected_features_list]
-selected_features_list
-
-# retrain the Random Forest with the selected features and then further remove the ones which are not important
-rf_selected_features <- randomForest(price ~., data = data, ntree = 100, importance = TRUE)
-rf_selected_features
-plot_feature_importance(rf_selected_features)
-data <- dplyr::select(data, -"is_superhost", -"business_room", -"cleanliness_rating")
-
-# store the final dataset
-write.csv(data, file = "./data/amsterdam_preprocessed.csv", row.names = FALSE)
+# # ensure results are reproducible
+# set.seed(19)
+# 
+# # set up the control parameters for recursive feature elimination
+# control <- rfeControl(functions = rfFuncs,
+#                       method = "cv",
+#                       number = 5,
+#                       saveDetails = TRUE)
+# 
+# # perform recursive feature elimination
+# rfe_results <- rfe(
+#   x = data[, !colnames(data) %in% "price", drop = FALSE],
+#   y = data[["price"]],
+#   method = "rf",
+#   metric = "RMSE",
+#   sizes = seq(1:ncol(data)),
+#   rfeControl = control,
+#   ntree = 100
+# )
+# 
+# ggplot(data = rfe_results, metric = "RMSE") +
+#   theme_minimal() +
+#   labs(title = "Cross-validation RMSE for each best subset of features", x = "Variables", y = "RMSE")
+# 
+# predictors(rfe_results)
+# rfe_results$results
+# 
+# # create a formula based on the selected features
+# selected_features_list <- c()
+# 
+# for (feature in colnames(data)) {
+#   for (important_feature in predictors(rfe_results)) {
+#     if (grepl(feature, important_feature)) {
+#       selected_features_list <- append(selected_features_list, feature)
+#       break
+#     }
+#   }
+# }
+# 
+# # get only the selected features and store the filtered dataset for further use
+# selected_features_list <- append(selected_features_list, "price")
+# data <- data[, selected_features_list]
+# selected_features_list
+# 
+# # retrain the Random Forest with the selected features and then further remove the ones which are not important
+# rf_selected_features <- randomForest(price ~., data = data, ntree = 100, importance = TRUE)
+# rf_selected_features
+# plot_feature_importance(rf_selected_features)
+# data <- dplyr::select(data, -"is_superhost", -"business_room", -"cleanliness_rating")
+# 
+# # store the final dataset
+# write.csv(data, file = "./data/amsterdam_preprocessed.csv", row.names = FALSE)
 ```
 
 
@@ -199,52 +303,53 @@ write.csv(data, file = "./data/amsterdam_preprocessed.csv", row.names = FALSE)
 
 ```{r modeling_optimization, warning=FALSE}
 # tune the hyperparameters
-optimization_control <- trainControl(method = 'cv', number = 5)
-number_of_features <- ncol(data)
-
-mtry_values <- c(number_of_features,
-                 round(sqrt(number_of_features)),
-                 round(number_of_features / 3))
-ntree_values <- c(64, 100, 128, 500)
-best_rmse <- .Machine$integer.max
-
-for (ntree_value in ntree_values) {
-    rf_optimized <- train(
-      price ~ .,
-      data = data,
-      method = 'rf',
-      metric = 'RMSE',
-      ntree = ntree_value,
-      tuneGrid = expand.grid(.mtry = mtry_values),
-      trControl = optimization_control
-    )
-
-    rmse <- min(rf_optimized$results$RMSE)
-
-    if (best_rmse > rmse) {
-      best_rmse <- rmse
-      best_rf_optimized <- rf_optimized$finalModel
-    }
-}
-
-best_rmse
-best_rf_optimized
+# optimization_control <- trainControl(method = 'cv', number = 5)
+# number_of_features <- ncol(data)
+# 
+# mtry_values <- c(number_of_features,
+#                  round(sqrt(number_of_features)),
+#                  round(number_of_features / 3))
+# ntree_values <- c(64, 100, 128, 500)
+# best_rmse <- .Machine$integer.max
+# 
+# for (ntree_value in ntree_values) {
+#     rf_optimized <- train(
+#       price ~ .,
+#       data = data,
+#       method = 'rf',
+#       metric = 'RMSE',
+#       ntree = ntree_value,
+#       tuneGrid = expand.grid(.mtry = mtry_values),
+#       trControl = optimization_control
+#     )
+# 
+#     rmse <- min(rf_optimized$results$RMSE)
+# 
+#     if (best_rmse > rmse) {
+#       best_rmse <- rmse
+#       best_rf_optimized <- rf_optimized$finalModel
+#     }
+# }
+# 
+# best_rmse
+# best_rf_optimized
 ```
 
 ### Final model
 
 ```{r final_model}
 # get the best params and re-fit the model on the whole dataset, then save it
-rf_final_model <- randomForest(
-  price ~.,
-  data = data,
-  importance = TRUE,
-  mtry = best_rf_optimized$mtry,
-  ntree = best_rf_optimized$ntree,
-)
-rf_final_model
-plot_feature_importance(rf_final_model)
-saveRDS(rf_final_model, file = "./airbnb_price_prediction/rf_model.rds")
+# rf_final_model <- randomForest(
+#   price ~.,
+#   data = data,
+#   importance = TRUE,
+#   mtry = best_rf_optimized$mtry,
+#   ntree = best_rf_optimized$ntree,
+# )
+# rf_final_model
+# plot_feature_importance(rf_final_model)
+# saveRDS(rf_final_model, file = "./airbnb_price_prediction/rf_model.rds")
 ```
 
 ### Reflection
+- summarize findings
