@@ -1,9 +1,10 @@
 ---
 title: "Airbnb Price Prediction"
-subtitle: Mihai-Bogdan Bîndilă 3264424
+subtitle: "Mihai-Bogdan Bîndilă 3264424"
 output:
   html_document:
     df_print: paged
+  pdf_document: default
 ---
 
 ```{r import_packages, include=FALSE}
@@ -15,24 +16,30 @@ library(rsample)
 library(caret)
 library(MASS)
 library(randomForest)
+library(corrplot)
+library(infotheo)
+library(leaflet)
+library(leaflet.extras)
+library(boot)
 ```
 
 ### Problem description
 
-The number of Airbnb listings has recorded a [steady increase](https://www.businessofapps.com/data/airbnb-statistics/), from 300,000 in 2013 to 7.7 million in 2023. Hence, this project aims to leverage this rich data to identify key factors influencing nightly rental prices. With a focus on Amsterdam as a case study, we will build a predictive model to estimate these prices. The developed model will be integrated into a web application designed for two user groups: 
+The number of Airbnb listings has recorded a [steady increase](https://www.businessofapps.com/data/airbnb-statistics/), from 300,000 in 2013 to 7.7 million in 2023. Hence, this project aims to leverage this rich data to identify key factors influencing nightly rental prices. With a focus on Amsterdam as a case study, we will build a predictive model to estimate these prices. The developed model will be integrated into a web application designed for two user groups:
 
-**Owners:** Gain insights into optimal pricing strategies based on property characteristics and potential guest ratings. \
+**Owners:** Gain insights into optimal pricing strategies based on property characteristics and potential guest ratings.\
 **Guests:** Assess the fairness of listed prices and explore price variations across different locations for similar properties.
 
 ### Data description
 
-It contains the following features that can be used to predict the price per night (realSum): \
-**- property characteristics:** type of room, private or shared, capacity, number of bedrooms, for business purposes or not \
-**- data from Tripadvisor:** accessibility to attractions and restaurants within the neighborhood of the property \
-**- location:** longitude, latitude, distance from the city center and from the nearest metro station \
-**- ratings:** cleanliness and guest satisfaction scores \
+It contains the following features that can be used to predict the price per night (realSum):\
+**- property characteristics:** type of room, private or shared, capacity, number of bedrooms, for business purposes or not\
+**- data from Tripadvisor:** accessibility to attractions and restaurants within the neighborhood of the property\
+**- location:** longitude, latitude, distance from the city center and from the nearest metro station\
+**- ratings:** cleanliness and guest satisfaction scores\
 **- host:** is super host or not
 
+# TODO: mention it's a regression problem
 
 ```{r load_data}
 # load the CSV files, combine them into one data frame and store it in a new CSV
@@ -78,8 +85,7 @@ complete_data <- rename(
 )
 ```
 
-
-The second step needed for its inspection is represented by the factorization of categorical columns. 
+The second step needed for its inspection is represented by the factorization of categorical columns.
 
 ```{r factor_categorical_features}
 # factor the categorical features
@@ -108,7 +114,7 @@ There are `r categorical_variables_no` categorical columns and `r continuous_var
 
 #### Missing values
 
-After familiarizing with the data, we continue with the data cleaning process. Firstly, we look for missing values. It can be observed that there are **no missing value** in any of the columns. 
+After familiarizing with the data, we continue with the data cleaning process. Firstly, we look for missing values. It can be observed that there are **no missing value** in any of the columns.
 
 ```{r missinv_values}
 # count the number of missing values per column
@@ -127,7 +133,7 @@ data <- subset(complete_data,
                select = -c(index, attr_index, rest_index, room_private))
 ```
 
-#### Consistency 
+#### Consistency
 
 In term of consistency, the categorical columns with two classes should contain the same values (TRUE and FALSE), but in our case **multiple_rooms** and **business_room** have the values 0 and 1. Last but not least, the uniformity can be maximized if the ratings from **cleanliness_rating** and **guest_satisfaction_overall** have the same scale.
 
@@ -145,7 +151,6 @@ data$cleanliness_rating  <- data$cleanliness_rating * 10
 head(data)
 ```
 
-
 ### Data Analysis
 
 #### Summary statistics
@@ -159,7 +164,7 @@ data.frame(
     everything(), ~ min(.x)
   )), use.names = FALSE),
   lower_bound = unlist(continuous_data %>% summarize(across(
-   everything(), ~ median(.x) - 1.5 * (quantile(.x, 0.75) - quantile(.x, 0.25))
+    everything(), ~ median(.x) - 1.5 * (quantile(.x, 0.75) - quantile(.x, 0.25))
   )), use.names = FALSE),
   mean = unlist(continuous_data %>% summarize(across(
     everything(), ~ mean(.x)
@@ -179,37 +184,170 @@ data.frame(
 ```{r summary_statistics_categorical}
 categorical_data <- data %>% dplyr::select(where(is.factor))
 
-
 get_categorical_frequencies <- function(data, column_name) {
   categories <- as.data.frame(addmargins(table(categorical_data[[column_name]])))
-  categories <- categories[1:(nrow(categories) - 1),]
+  categories <- categories[1:(nrow(categories) - 1), ]
   
   categories_freq <- NULL
   
-  for (index in seq(1, length(categories$Var1))){
-    category_freq <- paste(categories$Var1[index], " - ", round(categories$Freq[index] / nrow(data) * 100, 2), "%", sep="")
+  for (index in seq(1, length(categories$Var1))) {
+    category_freq <- paste(categories$Var1[index],
+                           " - ",
+                           round(categories$Freq[index] / nrow(data) * 100, 2),
+                           "%",
+                           sep = "")
     
-    if (is.null(categories_freq)){
+    if (is.null(categories_freq)) {
       categories_freq <- category_freq
     } else {
-      categories_freq <- paste(categories_freq, category_freq, sep="    ")
+      categories_freq <- paste(categories_freq, category_freq, sep = "    ")
     }
   }
   
   return (categories_freq)
 }
 
-get_categorical_frequencies(data, "room_type")
+categorial_frequencies <- NULL
+
+for (column_name in colnames(categorical_data)) {
+  current_frequencies <- as.data.frame(list(
+    "feature" = column_name,
+    "freq_of_classes" = get_categorical_frequencies(data, column_name)
+  ))
+  
+  
+  if (is.null(categorial_frequencies)) {
+    categorial_frequencies <- current_frequencies
+  } else{
+    categorial_frequencies <- rbind(categorial_frequencies, current_frequencies)
+  }
+}
+
+categorial_frequencies
 ```
 
+#### Univariate analysis
 
-- check for outliers
-- statistics for each feature (e.g. for categorical features compute the percentage of classes)
-- visualize features: univriate, bivariate, multivariate
-- check if there are outliers
+-   price - histogram or violin plot
+
+```{r price_histogram}
+ggplot(data, aes(x = price)) +
+  geom_histogram(binwidth = 100, fill = "#FF5A5F") +
+  labs(x = "Price", y = "Count", title = "Histogram of the price with a line indicating the 99th percentile") +
+  theme_minimal() +
+  geom_vline(xintercept  = quantile(data$price, 0.99), size = 1.5)
+
+data %>% dplyr::filter(price > quantile(data$price, 0.99))
+```
+
+#### Multivariate analysis
+
+```{r corr_matrix}
+corrplot(
+  cor(continuous_data, method = "spearman"),
+  method = "color",
+  addCoef.col = "black",
+  number.cex = 0.7,
+  tl.col = "black",
+  tl.srt = 45,
+  mar = c(1, 1, 2, 1),
+  title = "Spearman correlation matrix for continuous features",
+  col = colorRampPalette(c("#484848", "#FFFFFF", "#FF5A5F"))(200)
+)
+```
+
+```{r mutual_information_matrix}
+mutual_information <- mutinformation(categorical_data)
+mutual_information[mutual_information > 1] <- 1
+
+corrplot(
+  mutual_information,
+  method = "color",
+  addCoef.col = "black",
+  number.cex = 0.7,
+  tl.col = "black",
+  tl.srt = 45,
+  mar = c(1, 1, 2, 1),
+  title = "Mutual information matrix for categorical features",
+  col = colorRampPalette(c("#484848", "#FFFFFF", "#FF5A5F"))(200)
+)
+```
+
+#### Bivariate analysis
+
+-   indices - scatter plot
+
+```{r indices_scatter}
+ggplot(data,
+       aes(
+         x = attractions_index,
+         y = restaurants_index,
+         color = "#FF5A5F"
+       )) +
+  geom_point() +
+  labs(title = "Scatter plot of atrractions and restaurant indices") +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+```{r price_location_heatmap}
+leaflet() %>%
+  setView(lng = 4.9, lat = 52.37, zoom = 11) %>%
+  addProviderTiles(providers$CartoDB.Positron) %>%
+  addHeatmap(
+    lng = data$longitude,
+    lat = data$latitude,
+    intensity = data$price,
+    radius = 10,
+    blur = 2,
+    max = 30,
+    gradient = c("#FF5A5F", "#FF5A5F")
+  )
+```
+
+```{r rating_price_scatter}
+ggplot(data, aes(
+  x = satisfaction_rating,
+  y = price,
+  color = "#FF5A5F"
+)) +
+  geom_point() +
+  labs(title = "Scatter plot of satisfaction rating and price") +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+```{r capacity_price_box}
+ggplot(data, aes(x = capacity, y = price, fill = capacity)) +
+  geom_boxplot() +
+  labs(title = "Scatter plot of capacity versus price") +
+  scale_fill_manual(values = c("#FF5A5F", "#767676", "#FF5A5F", "#767676", "#FF5A5F")) +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+```{r bedrooms_price_box}
+ggplot(data, aes(x = bedrooms_no, y = price, fill = bedrooms_no)) +
+  geom_boxplot() +
+  labs(title = "Scatter plot of bedrooms number versus price") +
+  scale_fill_manual(values = c(
+    "#FF5A5F",
+    "#767676",
+    "#FF5A5F",
+    "#767676",
+    "#FF5A5F",
+    "#767676"
+  )) +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+-   check if there are outliers
 
 ### Feature engineering
-- feature selection
+
+-   feature selection
+
 ```{r feature_importance}
 plot_feature_importance <- function(rf_model) {
   # build the feature importance plot given by the model on the entire dataset
@@ -230,126 +368,242 @@ plot_feature_importance <- function(rf_model) {
     theme_minimal() +
     guides(fill = "none") +
     scale_y_continuous(breaks = seq(0, 100, by = 5),
-                       labels = seq(0, 100, by = 5),) +
+                       labels = seq(0, 100, by = 5),
+    ) +
     scale_x_discrete(limits = rownames(feature_importance)) +
     coord_flip()
 }
 ```
 
-
 ```{r feature_selection, warning=FALSE}
-# # ensure results are reproducible
-# set.seed(19)
-# 
-# # set up the control parameters for recursive feature elimination
-# control <- rfeControl(functions = rfFuncs,
-#                       method = "cv",
-#                       number = 5,
-#                       saveDetails = TRUE)
-# 
-# # perform recursive feature elimination
-# rfe_results <- rfe(
-#   x = data[, !colnames(data) %in% "price", drop = FALSE],
-#   y = data[["price"]],
-#   method = "rf",
-#   metric = "RMSE",
-#   sizes = seq(1:ncol(data)),
-#   rfeControl = control,
-#   ntree = 100
-# )
-# 
-# ggplot(data = rfe_results, metric = "RMSE") +
-#   theme_minimal() +
-#   labs(title = "Cross-validation RMSE for each best subset of features", x = "Variables", y = "RMSE")
-# 
-# predictors(rfe_results)
-# rfe_results$results
-# 
-# # create a formula based on the selected features
-# selected_features_list <- c()
-# 
-# for (feature in colnames(data)) {
-#   for (important_feature in predictors(rfe_results)) {
-#     if (grepl(feature, important_feature)) {
-#       selected_features_list <- append(selected_features_list, feature)
-#       break
-#     }
-#   }
-# }
-# 
-# # get only the selected features and store the filtered dataset for further use
-# selected_features_list <- append(selected_features_list, "price")
-# data <- data[, selected_features_list]
-# selected_features_list
-# 
-# # retrain the Random Forest with the selected features and then further remove the ones which are not important
-# rf_selected_features <- randomForest(price ~., data = data, ntree = 100, importance = TRUE)
-# rf_selected_features
-# plot_feature_importance(rf_selected_features)
-# data <- dplyr::select(data, -"is_superhost", -"business_room", -"cleanliness_rating")
-# 
-# # store the final dataset
-# write.csv(data, file = "./data/amsterdam_preprocessed.csv", row.names = FALSE)
+# ensure results are reproducible
+set.seed(19)
+
+# set up the control parameters for recursive feature elimination
+control <- rfeControl(functions = rfFuncs,
+                      method = "cv",
+                      number = 10,
+                      saveDetails = TRUE)
+
+# perform recursive feature elimination
+rfe_results <- rfe(
+  x = data[, !colnames(data) %in% "price", drop = FALSE],
+  y = data[["price"]],
+  method = "rf",
+  metric = "RMSE",
+  sizes = seq(1:ncol(data)),
+  rfeControl = control,
+  ntree = 100
+)
+
+ggplot(data = rfe_results, metric = "RMSE") +
+  theme_minimal() +
+  labs(title = "Cross-validation RMSE for each best subset of features", x = "Variables", y = "RMSE")
+
+predictors(rfe_results)
+rfe_results$results
+
+# get the selected features
+selected_features_list <- c()
+
+for (feature in colnames(data)) {
+  for (important_feature in predictors(rfe_results)) {
+    if (grepl(feature, important_feature)) {
+      selected_features_list <- append(selected_features_list, feature)
+      break
+    }
+  }
+}
+
+# get only the selected features and store the filtered dataset for further use
+selected_features_list <- append(selected_features_list, "price")
+data <- data[, selected_features_list]
+selected_features_list
+
+# retrain the Random Forest with the selected features and then further remove the ones which are not important
+rf_selected_features <- randomForest(price ~., data = data, ntree = 100, importance = TRUE)
+rf_selected_features
+plot_feature_importance(rf_selected_features)
+data <- dplyr::select(data, -"is_superhost", -"business_room", -"cleanliness_rating")
+data
+# store the final dataset
+write.csv(data, file = "./data/amsterdam_preprocessed.csv", row.names = FALSE)
 ```
 
-
 ### Modeling
-- train
-- optimize
-- validate
-- interpret weights / feature importance
-- perform statistical tests
 
+-   motivate the model choice
+-   train
+-   optimize
+-   validate
+-   interpret weights / feature importance
+-   perform statistical tests
 
 ```{r modeling_optimization, warning=FALSE}
 # tune the hyperparameters
-# optimization_control <- trainControl(method = 'cv', number = 5)
-# number_of_features <- ncol(data)
-# 
-# mtry_values <- c(number_of_features,
-#                  round(sqrt(number_of_features)),
-#                  round(number_of_features / 3))
-# ntree_values <- c(64, 100, 128, 500)
-# best_rmse <- .Machine$integer.max
-# 
-# for (ntree_value in ntree_values) {
-#     rf_optimized <- train(
-#       price ~ .,
-#       data = data,
-#       method = 'rf',
-#       metric = 'RMSE',
-#       ntree = ntree_value,
-#       tuneGrid = expand.grid(.mtry = mtry_values),
-#       trControl = optimization_control
-#     )
-# 
-#     rmse <- min(rf_optimized$results$RMSE)
-# 
-#     if (best_rmse > rmse) {
-#       best_rmse <- rmse
-#       best_rf_optimized <- rf_optimized$finalModel
-#     }
-# }
-# 
-# best_rmse
-# best_rf_optimized
-```
+optimization_control <- trainControl(method = 'cv', number = 5)
+number_of_features <- ncol(data)
 
-### Final model
+mtry_values <- c(number_of_features - 1,
+                 round(sqrt(number_of_features - 1)),
+                 round((number_of_features - 1)/ 3))
+
+ntree_values <- c(64, 100, 128, 500)
+best_rmse <- .Machine$integer.max
+
+for (ntree_value in ntree_values) {
+    rf_optimized <- train(
+      price ~ .,
+      data = data,
+      method = 'rf',
+      metric = 'RMSE',
+      ntree = ntree_value,
+      tuneGrid = expand.grid(.mtry = mtry_values),
+      trControl = optimization_control
+    )
+
+    rmse <- min(rf_optimized$results$RMSE)
+
+    if (best_rmse > rmse) {
+      best_rmse <- rmse
+      best_rf_optimized <- rf_optimized$finalModel
+    }
+}
+
+best_rmse
+best_rf_optimized
+```
+### Final Model
 
 ```{r final_model}
 # get the best params and re-fit the model on the whole dataset, then save it
-# rf_final_model <- randomForest(
-#   price ~.,
-#   data = data,
-#   importance = TRUE,
-#   mtry = best_rf_optimized$mtry,
-#   ntree = best_rf_optimized$ntree,
-# )
-# rf_final_model
-# plot_feature_importance(rf_final_model)
-# saveRDS(rf_final_model, file = "./airbnb_price_prediction/rf_model.rds")
+rf_final_model <- randomForest(
+  price ~.,
+  data = data,
+  importance = TRUE,
+  mtry = best_rf_optimized$mtry,
+  ntree = best_rf_optimized$ntree,
+)
+rf_final_model
+
+predictions <- predict(rf_final_model, newdata = data)
+MAE <- mean(abs(data$price - predictions))
+Rsq <- cor(data$price, predictions)^2
+RMSE <- sqrt(mean((data$price - predictions)^2))
+
+paste("RMSE final model:", round(MAE, 2), "R^2 final model:", round(Rsq, 2), "RMSE final model:", round(RMSE, 2))
+
+plot_feature_importance(rf_final_model)
+saveRDS(rf_final_model, file = "./airbnb_price_prediction/rf_model.rds")
+```
+
+
+### Validation
+
+```{r cross_validation, warning=FALSE}
+cv_control <- caret::trainControl(
+  method = "repeatedcv",
+  number = 5,
+  repeats = 100,
+  savePredictions = TRUE
+)
+
+rf_cv_results <- caret::train(
+  x = data[, !colnames(data) %in% "price", drop = FALSE],
+  y = data[["price"]],
+  method = "rf",
+  metric = "RMSE",
+  tuneGrid = expand.grid(.mtry = c(best_rf_optimized$mtry)),
+  ntree = best_rf_optimized$ntree,
+  trControl = cv_control
+)
+
+pred_obs <- rf_cv_results$pred %>% dplyr::filter(str_sub(Resample, start=7, end=12) == "Rep001")
+pred_obs
+
+ggplot(pred_obs, aes(
+  x = pred,
+  y = obs - pred,
+  color = "#FF5A5F"
+)) +
+  geom_point() +
+  labs(x = "Predicted value", y = "Residuals", title = "Residual plot computed on one iteration of CV") +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+
+rf_cv_results$pred
+
+rf_cv_results$resample
+
+# get the average metrics value for each repetition out of the 500
+agg_metrics <- subset(rf_cv_results$resample %>%
+  mutate(Repetition = str_sub(Resample, start = 7)) %>%
+  group_by(Repetition) %>%
+   summarize(across(everything(), ~ mean(.x))), select=-c(Resample))
+
+paste(
+  "MAE 95% confidence interval:",
+  round(quantile(agg_metrics$MAE, 0.025), 2),
+  round(mean(agg_metrics$MAE), 2),
+  round(quantile(agg_metrics$MAE, 0.975), 2)
+)
+
+paste(
+  "R^2 95% confidence interval:",
+  round(quantile(agg_metrics$Rsquared, 0.025), 2),
+  round(mean(agg_metrics$Rsquared), 2),
+  round(quantile(agg_metrics$Rsquared, 0.975), 2)
+)
+
+paste(
+  "RMSE 95% confidence interval:",
+  round(quantile(agg_metrics$RMSE, 0.025), 2),
+  round(mean(agg_metrics$RMSE), 2),
+  round(quantile(agg_metrics$RMSE, 0.975), 2)
+)
+```
+
+```{r plot_MAE}
+ggplot(data = agg_metrics, aes(x = MAE, fill = "#FF5A5F")) +
+  geom_histogram() +
+  labs(title = "Histogram of the MAE for each cross-validation repetition", x = "MAE", y = "Frequency") +
+  theme(plot.margin = ggplot2::margin(20, 20, 20, 20), legend.position = "none")
+```
+
+```{r bootstrap_validation}
+bootstap_validation <- function(data, index, all_features) {
+  # get the bootstrap sample
+  bootstrap_data <- data[index, ]
+  
+  # train the model on the bootstrap data
+  boot_rf_model <- randomForest(
+    price ~ .,
+    data = bootstrap_data,
+    mtry = best_rf_optimized$mtry,
+    ntree = best_rf_optimized$ntree,
+  )
+  
+  # predict on the bootstrap dataset and compute the RMSE
+  predictions <- predict(boot_rf_model, newdata = bootstrap_data)
+  RMSE_b_bootstrap <- sqrt(mean((bootstrap_data$price - predictions) ^ 2))
+    
+  # predict on the entire dataset and compute the RMSE
+  predictions <- predict(boot_rf_model, newdata = data)
+  RMSE_b_orig <- sqrt(mean((data$price - predictions) ^ 2))
+  
+  return (c(RMSE_b_bootstrap, RMSE_b_orig, RMSE_b_bootstrap - RMSE_b_orig))
+}
+
+boot_data <- boot(data, bootstap_validation, R=10)
+boot_data
+
+colnames(boot_data$t) <- c("RMSE_b_boot","RMSE_b_orig","RMSE_optimism")
+boot_validation_metrics <- colMeans(boot_data$t)
+
+RMSE - boot_validation_metrics[3]
 ```
 
 ### Reflection
-- summarize findings
+
+-   summarize findings
