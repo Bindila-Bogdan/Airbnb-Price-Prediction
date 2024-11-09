@@ -25,7 +25,7 @@ library(boot)
 
 ### Problem description
 
-The number of Airbnb listings has recorded a [steady increase](https://www.businessofapps.com/data/airbnb-statistics/), from 300,000 in 2013 to 7.7 million in 2023. Hence, this project aims to leverage this rich data to identify key factors influencing nightly rental prices. With a focus on Amsterdam as a case study, we will build a predictive model to estimate these prices. The developed model will be integrated into a web application designed for two user groups:
+The number of Airbnb listings has recorded a [steady increase](https://www.businessofapps.com/data/airbnb-statistics/), from 300,000 in 2013 to 7.7 million in 2023. Hence, this project aims to leverage this rich data to identify key factors influencing nightly rental prices. With a focus on Amsterdam as a case study, we will build a predictive regression model to estimate these prices. The developed model will be integrated into a web application designed for two user groups:
 
 **Owners:** Gain insights into optimal pricing strategies based on property characteristics and potential guest ratings.\
 **Guests:** Assess the fairness of listed prices and explore price variations across different locations for similar properties.
@@ -38,8 +38,6 @@ It contains the following features that can be used to predict the price per nig
 **- location:** longitude, latitude, distance from the city center and from the nearest metro station\
 **- ratings:** cleanliness and guest satisfaction scores\
 **- host:** is super host or not
-
-# TODO: mention it's a regression problem
 
 ```{r load_data}
 # load the CSV files, combine them into one data frame and store it in a new CSV
@@ -425,9 +423,10 @@ rf_selected_features <- randomForest(price ~., data = data, ntree = 100, importa
 rf_selected_features
 plot_feature_importance(rf_selected_features)
 data <- dplyr::select(data, -"is_superhost", -"business_room", -"cleanliness_rating")
-data
+
 # store the final dataset
 write.csv(data, file = "./data/amsterdam_preprocessed.csv", row.names = FALSE)
+data
 ```
 
 ### Modeling
@@ -448,7 +447,7 @@ mtry_values <- c(number_of_features - 1,
                  round(sqrt(number_of_features - 1)),
                  round((number_of_features - 1)/ 3))
 
-ntree_values <- c(64, 100, 128, 500)
+ntree_values <- c(64, 100, 128, 200)
 best_rmse <- .Machine$integer.max
 
 for (ntree_value in ntree_values) {
@@ -491,7 +490,7 @@ MAE <- mean(abs(data$price - predictions))
 Rsq <- cor(data$price, predictions)^2
 RMSE <- sqrt(mean((data$price - predictions)^2))
 
-paste("RMSE final model:", round(MAE, 2), "R^2 final model:", round(Rsq, 2), "RMSE final model:", round(RMSE, 2))
+cat(paste("R^2 final model:", round(Rsq, 2), "\n", "RMSE final model:", round(MAE, 2), "\n", " RMSE final model:", round(RMSE, 2)))
 
 plot_feature_importance(rf_final_model)
 saveRDS(rf_final_model, file = "./airbnb_price_prediction/rf_model.rds")
@@ -504,13 +503,13 @@ saveRDS(rf_final_model, file = "./airbnb_price_prediction/rf_model.rds")
 cv_control <- caret::trainControl(
   method = "repeatedcv",
   number = 5,
-  repeats = 100,
+  repeats = 30,
   savePredictions = TRUE
 )
 
 rf_cv_results <- caret::train(
-  x = data[, !colnames(data) %in% "price", drop = FALSE],
-  y = data[["price"]],
+  price ~ .,
+  data = data,
   method = "rf",
   metric = "RMSE",
   tuneGrid = expand.grid(.mtry = c(best_rf_optimized$mtry)),
@@ -518,8 +517,7 @@ rf_cv_results <- caret::train(
   trControl = cv_control
 )
 
-pred_obs <- rf_cv_results$pred %>% dplyr::filter(str_sub(Resample, start=7, end=12) == "Rep001")
-pred_obs
+pred_obs <- rf_cv_results$pred %>% dplyr::filter(str_sub(Resample, start=7, end=11) == "Rep01")
 
 ggplot(pred_obs, aes(
   x = pred,
@@ -531,37 +529,28 @@ ggplot(pred_obs, aes(
   theme_minimal() +
   theme(legend.position = "none")
 
-
-rf_cv_results$pred
-
-rf_cv_results$resample
-
 # get the average metrics value for each repetition out of the 500
 agg_metrics <- subset(rf_cv_results$resample %>%
   mutate(Repetition = str_sub(Resample, start = 7)) %>%
   group_by(Repetition) %>%
    summarize(across(everything(), ~ mean(.x))), select=-c(Resample))
 
-paste(
+cat(paste(
+    "R^2 95% confidence interval:",
+  round(quantile(agg_metrics$Rsquared, 0.025), 2),
+  round(mean(agg_metrics$Rsquared), 2),
+  round(quantile(agg_metrics$Rsquared, 0.975), 2),
+  "\n",
   "MAE 95% confidence interval:",
   round(quantile(agg_metrics$MAE, 0.025), 2),
   round(mean(agg_metrics$MAE), 2),
-  round(quantile(agg_metrics$MAE, 0.975), 2)
-)
-
-paste(
-  "R^2 95% confidence interval:",
-  round(quantile(agg_metrics$Rsquared, 0.025), 2),
-  round(mean(agg_metrics$Rsquared), 2),
-  round(quantile(agg_metrics$Rsquared, 0.975), 2)
-)
-
-paste(
-  "RMSE 95% confidence interval:",
+  round(quantile(agg_metrics$MAE, 0.975), 2),
+  "\n",
+  " RMSE 95% confidence interval:",
   round(quantile(agg_metrics$RMSE, 0.025), 2),
   round(mean(agg_metrics$RMSE), 2),
   round(quantile(agg_metrics$RMSE, 0.975), 2)
-)
+))
 ```
 
 ```{r plot_MAE}
@@ -595,7 +584,7 @@ bootstap_validation <- function(data, index, all_features) {
   return (c(RMSE_b_bootstrap, RMSE_b_orig, RMSE_b_bootstrap - RMSE_b_orig))
 }
 
-boot_data <- boot(data, bootstap_validation, R=10)
+boot_data <- boot(data, bootstap_validation, R=30)
 boot_data
 
 colnames(boot_data$t) <- c("RMSE_b_boot","RMSE_b_orig","RMSE_optimism")
@@ -604,6 +593,8 @@ boot_validation_metrics <- colMeans(boot_data$t)
 RMSE - boot_validation_metrics[3]
 ```
 
-### Reflection
+### Reflection and future improvements
 
--   summarize findings
+- summarize findings
+- remove outlier values
+- cleint view
