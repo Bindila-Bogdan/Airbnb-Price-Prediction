@@ -25,10 +25,7 @@ library(boot)
 
 ### Problem description
 
-The number of Airbnb listings has recorded a [steady increase](https://www.businessofapps.com/data/airbnb-statistics/), from 300,000 in 2013 to 7.7 million in 2023. Hence, this project aims to leverage this rich data to identify key factors influencing nightly rental prices. With a focus on Amsterdam as a case study, we will build a predictive regression model to estimate these prices. The developed model will be integrated into a web application designed for two user groups:
-
-**Owners:** Gain insights into optimal pricing strategies based on property characteristics and potential guest ratings.\
-**Guests:** Assess the fairness of listed prices and explore price variations across different locations for similar properties.
+The number of Airbnb listings has recorded a [steady increase](https://www.businessofapps.com/data/airbnb-statistics/), from 300,000 in 2013 to 7.7 million in 2023. Hence, this project aims to leverage this rich data to identify key factors influencing nightly rental prices. With a focus on Amsterdam as a case study, we will build a predictive regression model to estimate these prices. The developed model will be integrated into a web application designed for owners. They will be empowered to gain insights into optimal pricing strategies based on property characteristics and potential guest ratings.
 
 ### Data description
 
@@ -40,7 +37,7 @@ It contains the following features that can be used to predict the price per nig
 **- host:** is super host or not
 
 ```{r load_data}
-# load the CSV files, combine them into one data frame and store it in a new CSV
+# load the CSV files, combine them into one data frame and store for later use in the Shiny Application
 data_weekdays <- read_delim(
   file = "./data/amsterdam_weekdays.csv",
   delim = ",",
@@ -54,7 +51,7 @@ data_weekends <- read_delim(
   show_col_types = FALSE
 )
 complete_data <- bind_rows(data_weekdays, data_weekends)
-write.csv(data, file = "./data/amsterdam_raw.csv", row.names = FALSE)
+write.csv(complete_data, file = "./airbnb_price_prediction/www/amsterdam_raw.csv", row.names = FALSE)
 complete_data
 ```
 
@@ -83,7 +80,7 @@ complete_data <- rename(
 )
 ```
 
-The second step needed for its inspection is represented by the factorization of categorical columns.
+The second step needed for the inspection is represented by the factorization of categorical columns.
 
 ```{r factor_categorical_features}
 # factor the categorical features
@@ -106,7 +103,7 @@ categorical_variables_no <- ncol(complete_data %>% dplyr::select(where(is.factor
 continuous_variables_no <- ncol(complete_data %>% dplyr::select(!where(is.factor)))
 ```
 
-There are `r categorical_variables_no` categorical columns and `r continuous_variables_no` continuous columns.
+There are **`r categorical_variables_no` categorical columns** and **`r continuous_variables_no` continuous columns**.
 
 ### Data cleaning
 
@@ -145,7 +142,6 @@ data <- data %>%
 
 # scale the cleanliness rating to have the same scale as the satisfaction rating
 data$cleanliness_rating  <- data$cleanliness_rating * 10
-
 head(data)
 ```
 
@@ -153,9 +149,10 @@ head(data)
 
 #### Summary statistics
 
+When it comes to summary statistics, we look first at continuous features. During this step, the bound for finding outliers is computed using the Interquartile Range. It can be observed that for features such as price, distances and indices the lower bounds are smaller than the minimum values, leading to the conclusion that their distribution is right-skewed. At this point, it is concerning that the target variable price has a wide range of outliers, between ~992 and ~8130. **Because this range is under-represented, the model's performance will be quite low for this case.**
+
 ```{r summary_statistics_continuous}
 continuous_data <- data %>% dplyr::select(!where(is.factor))
-
 data.frame(
   feature_names = colnames(continuous_data),
   min = unlist(continuous_data %>% summarize(across(
@@ -178,6 +175,28 @@ data.frame(
   )), use.names = FALSE)
 )
 ```
+Below can be seen the number of observations with prices larger than the upper bound given by the Interquartile Range and the 99th quantile. We chose **to remove the extreme target outliers**. Otherwise, these extreme outliers (larger than the 99th quantile) will influence negatively the measured metrics of the trained model because the predictor will not be able to learn these rare observations.
+
+```{r}
+# count how many observations have a price larger than the bounds
+upper_bound <- median(data$price) + 1.5 * (quantile(data$price, 0.75) - quantile(data$price, 0.25))
+quantile_99 <- quantile(data$price, 0.99)
+
+cat(
+  paste("Number of rows with the price larger than the upper bound:"),
+  nrow(data %>% dplyr::filter(price >= upper_bound)),
+  "\n",
+  paste(
+    "Number of rows with the price larger than the 99th percentile:",
+    nrow(data %>% dplyr::filter(price >= quantile_99))
+  )
+)
+
+# remove outliers
+data <- data %>% dplyr::filter(price < quantile_99)
+```
+
+For categorical features, the occurrence of each class is calculated. The **room_share feature is highly unbalanced** and there is a good chance that it is not important for predicting the price. Additionally, there are functions like room_type or bedrooms_no with underrepresented classes like shared room or 5.
 
 ```{r summary_statistics_categorical}
 categorical_data <- data %>% dplyr::select(where(is.factor))
@@ -187,7 +206,6 @@ get_categorical_frequencies <- function(data, column_name) {
   categories <- categories[1:(nrow(categories) - 1), ]
   
   categories_freq <- NULL
-  
   for (index in seq(1, length(categories$Var1))) {
     category_freq <- paste(categories$Var1[index],
                            " - ",
@@ -206,13 +224,11 @@ get_categorical_frequencies <- function(data, column_name) {
 }
 
 categorial_frequencies <- NULL
-
 for (column_name in colnames(categorical_data)) {
   current_frequencies <- as.data.frame(list(
     "feature" = column_name,
     "freq_of_classes" = get_categorical_frequencies(data, column_name)
   ))
-  
   
   if (is.null(categorial_frequencies)) {
     categorial_frequencies <- current_frequencies
@@ -224,21 +240,24 @@ for (column_name in colnames(categorical_data)) {
 categorial_frequencies
 ```
 
-#### Univariate analysis
+### Data visualization
+#### Univariate visualizations
 
--   price - histogram or violin plot
+It can be observed that the original price distribution that includes outliers is right skewed. Previously there were removed the outliers larger than the second vertical line.
 
-```{r price_histogram}
-ggplot(data, aes(x = price)) +
+```{r price_histogram, warning=FALSE}
+# compute bounds for outliers and display the distribution of the price
+ggplot(complete_data, aes(x = price)) +
   geom_histogram(binwidth = 100, fill = "#FF5A5F") +
-  labs(x = "Price", y = "Count", title = "Histogram of the price with a line indicating the 99th percentile") +
+  labs(x = "Price", y = "Count", title = "Histogram of the price with indicators of the upper bound and the 99th quantile") +
   theme_minimal() +
-  geom_vline(xintercept  = quantile(data$price, 0.99), size = 1.5)
-
-data %>% dplyr::filter(price > quantile(data$price, 0.99))
+  geom_vline(xintercept  = upper_bound, size = 1.5) +
+  geom_vline(xintercept  = quantile_99, size = 1.5)
 ```
 
-#### Multivariate analysis
+#### Multivariate visualizations
+
+For continuous features, there is calculated a non-linear correlation, as the linear one is smaller with values up to 0.25 between price and predictors. It can be observed that between the target and any other feature, the correlation is at most a medium one (positive or negative). Also, the distances and indices are almost perfectly correlated, meaning that some of them will not be that relevant to the model.
 
 ```{r corr_matrix}
 corrplot(
@@ -253,6 +272,8 @@ corrplot(
   col = colorRampPalette(c("#484848", "#FFFFFF", "#FF5A5F"))(200)
 )
 ```
+
+When it comes to relationships between categorical features, mutual information was calculated. There is only one notable link between bedrooms_no and capacity.
 
 ```{r mutual_information_matrix}
 mutual_information <- mutinformation(categorical_data)
@@ -271,9 +292,11 @@ corrplot(
 )
 ```
 
-#### Bivariate analysis
+#### Bivariate visualizations
 
--   indices - scatter plot
+In this section we visualize relationships between variables.
+
+Even though these indices are almost perfectly correlated, locations with an attractiveness index higher than ~40 do not have many restaurants around, with the maximum index for restaurants being below 75.
 
 ```{r indices_scatter}
 ggplot(data,
@@ -287,6 +310,49 @@ ggplot(data,
   theme_minimal() +
   theme(legend.position = "none")
 ```
+
+It can be seen below that for every degree of satisfaction above 80, the price spectrum is almost covered. Additionally, more expensive properties have higher ratings, which is expected.
+
+```{r rating_price_scatter}
+ggplot(data, aes(
+  x = satisfaction_rating,
+  y = price,
+  color = "#FF5A5F"
+)) +
+  geom_point() +
+  labs(title = "Scatter plot of satisfaction rating and price") +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+For capacity and number of bedrooms, the median price tends to increase with the class of these two features.
+
+```{r capacity_price_box}
+ggplot(data, aes(x = capacity, y = price, fill = capacity)) +
+  geom_boxplot() +
+  labs(title = "Box plot of capacity versus price") +
+  scale_fill_manual(values = c("#FF5A5F", "#767676", "#FF5A5F", "#767676", "#FF5A5F")) +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+```{r bedrooms_price_box}
+ggplot(data, aes(x = bedrooms_no, y = price, fill = bedrooms_no)) +
+  geom_boxplot() +
+  labs(title = "Box plot of bedrooms number versus price") +
+  scale_fill_manual(values = c(
+    "#FF5A5F",
+    "#767676",
+    "#FF5A5F",
+    "#767676",
+    "#FF5A5F",
+    "#767676"
+  )) +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+Last but not least, the following map shows how the Airbnb price per night varies by location in Amsterdam.
 
 ```{r price_location_heatmap}
 leaflet() %>%
@@ -303,81 +369,22 @@ leaflet() %>%
   )
 ```
 
-```{r rating_price_scatter}
-ggplot(data, aes(
-  x = satisfaction_rating,
-  y = price,
-  color = "#FF5A5F"
-)) +
-  geom_point() +
-  labs(title = "Scatter plot of satisfaction rating and price") +
-  theme_minimal() +
-  theme(legend.position = "none")
-```
+### Motivating model choice
 
-```{r capacity_price_box}
-ggplot(data, aes(x = capacity, y = price, fill = capacity)) +
-  geom_boxplot() +
-  labs(title = "Scatter plot of capacity versus price") +
-  scale_fill_manual(values = c("#FF5A5F", "#767676", "#FF5A5F", "#767676", "#FF5A5F")) +
-  theme_minimal() +
-  theme(legend.position = "none")
-```
+Based on the exploratory analysis of the data, the chosen model is the Random Forest Regressor. This model was picked for several reasons: \
+1. Pearson correlation showed that there is no linear relationship between the predictors and the target, so a model that can capture complex nonlinear relationships must be used. \
+2. This model is interpretable, which is necessary in the context of a web application designed for end users. \
+3. It is robust to outliers that were detected in several independent variables, such as center_dist, metro_dist, attractions_index, and restaurants_index.
 
-```{r bedrooms_price_box}
-ggplot(data, aes(x = bedrooms_no, y = price, fill = bedrooms_no)) +
-  geom_boxplot() +
-  labs(title = "Scatter plot of bedrooms number versus price") +
-  scale_fill_manual(values = c(
-    "#FF5A5F",
-    "#767676",
-    "#FF5A5F",
-    "#767676",
-    "#FF5A5F",
-    "#767676"
-  )) +
-  theme_minimal() +
-  theme(legend.position = "none")
-```
+### Feature selection
 
--   check if there are outliers
-
-### Feature engineering
-
--   feature selection
-
-```{r feature_importance}
-plot_feature_importance <- function(rf_model) {
-  # build the feature importance plot given by the model on the entire dataset
-  feature_importance <- as.data.frame(importance(rf_model)) %>%
-    rename("importance" = "IncNodePurity")
-  feature_importance$importance  <- feature_importance$importance / sum(feature_importance$importance) * 100
-  feature_importance <- feature_importance %>% arrange(desc(importance))
-  
-  ggplot(feature_importance,
-         aes(
-           x  = rownames(feature_importance),
-           y = importance,
-           fill = importance
-         )) +
-    geom_bar(stat = "identity") +
-    scale_fill_gradient(low = "#767676", high = "#FF5A5F") +
-    labs(title = "Scaled Feature Importance", x = "Feature", y = "Importance") +
-    theme_minimal() +
-    guides(fill = "none") +
-    scale_y_continuous(breaks = seq(0, 100, by = 5),
-                       labels = seq(0, 100, by = 5),
-    ) +
-    scale_x_discrete(limits = rownames(feature_importance)) +
-    coord_flip()
-}
-```
+Before tuning the hyperparameters, we need to choose the best subset of features. To do this, the **recursive feature elimination** technique is used, which starts from the entire feature set and at each point removes the least significant feature until none remain. This method is applied together with a 10-fold cross-validation where the RMSE metric is minimized. There are used only 100 trees to speed-up the process.
 
 ```{r feature_selection, warning=FALSE}
 # ensure results are reproducible
 set.seed(19)
 
-# set up the control parameters for recursive feature elimination
+# set up the control parameters for recursive feature elimination (RFE)
 control <- rfeControl(functions = rfFuncs,
                       method = "cv",
                       number = 10,
@@ -394,13 +401,18 @@ rfe_results <- rfe(
   ntree = 100
 )
 
+# show the results of RFE
 ggplot(data = rfe_results, metric = "RMSE") +
   theme_minimal() +
   labs(title = "Cross-validation RMSE for each best subset of features", x = "Variables", y = "RMSE")
 
-predictors(rfe_results)
+# measured metrics for each subset of features
 rfe_results$results
+```
 
+Get only the selected features from the dataset and store this version of the dataset for later use in the Shiny application.
+
+```{r extract_selected_features}
 # get the selected features
 selected_features_list <- c()
 
@@ -416,29 +428,19 @@ for (feature in colnames(data)) {
 # get only the selected features and store the filtered dataset for further use
 selected_features_list <- append(selected_features_list, "price")
 data <- data[, selected_features_list]
-selected_features_list
-
-# retrain the Random Forest with the selected features and then further remove the ones which are not important
-rf_selected_features <- randomForest(price ~., data = data, ntree = 100, importance = TRUE)
-rf_selected_features
-plot_feature_importance(rf_selected_features)
-data <- dplyr::select(data, -"is_superhost", -"business_room", -"cleanliness_rating")
-
-# store the final dataset
-write.csv(data, file = "./data/amsterdam_preprocessed.csv", row.names = FALSE)
+write.csv(data, file = "./airbnb_price_prediction/www/amsterdam_preprocessed.csv", row.names = FALSE)
 data
 ```
 
 ### Modeling
 
--   motivate the model choice
--   train
--   optimize
--   validate
--   interpret weights / feature importance
--   perform statistical tests
+#### Tuning
 
-```{r modeling_optimization, warning=FALSE}
+In this step, we use a 5-fold cross-validation to optimize two hyperparameters of the Random Forest model. The optimized metric is RMSE and the search space is represented by: \
+- mtry: number of features randomly sampled as candidates at each split \
+- ntree: number of trees (we do not try to train too many trees as in the research paper [How many trees in a random forest?](https://link.springer.com/chapter/10.1007/978-3-642-31537-4_13) it has been shown that having more than 128 decision trees does not bring much benefit.)
+
+```{r tuning, warning=FALSE}
 # tune the hyperparameters
 optimization_control <- trainControl(method = 'cv', number = 5)
 number_of_features <- ncol(data)
@@ -469,10 +471,12 @@ for (ntree_value in ntree_values) {
     }
 }
 
-best_rmse
-best_rf_optimized
+paste("The best RMSE value is", round(best_rmse, 2), "obtained with mtry", best_rf_optimized$mtry, "and", best_rf_optimized$ntree, "trees.")
 ```
+
 ### Final Model
+
+Next we train the final model on the entire dataset with the found hyperparameters. As performance metrics we use the **coefficient of determination**, the **root mean squared error** and the **mean absolute error** because we want to have different perspectives on the model's performance.
 
 ```{r final_model}
 # get the best params and re-fit the model on the whole dataset, then save it
@@ -483,23 +487,57 @@ rf_final_model <- randomForest(
   mtry = best_rf_optimized$mtry,
   ntree = best_rf_optimized$ntree,
 )
-rf_final_model
 
 predictions <- predict(rf_final_model, newdata = data)
 MAE <- mean(abs(data$price - predictions))
 Rsq <- cor(data$price, predictions)^2
 RMSE <- sqrt(mean((data$price - predictions)^2))
 
-cat(paste("R^2 final model:", round(Rsq, 2), "\n", "RMSE final model:", round(MAE, 2), "\n", " RMSE final model:", round(RMSE, 2)))
-
-plot_feature_importance(rf_final_model)
-saveRDS(rf_final_model, file = "./airbnb_price_prediction/rf_model.rds")
+cat(paste("R^2 final model:", round(Rsq, 2), "\n", "MAE final model:", round(MAE, 2), "\n", " RMSE final model:", round(RMSE, 2)))
 ```
 
+After that we check the importance of the features and store the final model that will be used in the Shiny application. By scaling the feature importance such that their sum is 100, it can be seen that each has an importance of at least 5%, with **no_bedrooms** and **attraction_index** being the most impactful for price, which makes sense in the context of tourism.
+
+```{r feature_importance}
+plot_feature_importance <- function(rf_model) {
+  # build the feature importance plot given by the model on the entire dataset
+  feature_importance <- as.data.frame(importance(rf_model)) %>%
+    rename("importance" = "IncNodePurity")
+  feature_importance$importance  <- feature_importance$importance / sum(feature_importance$importance) * 100
+  feature_importance <- feature_importance %>% arrange(desc(importance))
+  
+  ggplot(feature_importance,
+         aes(
+           x  = rownames(feature_importance),
+           y = importance,
+           fill = importance
+         )) +
+    geom_bar(stat = "identity") +
+    scale_fill_gradient(low = "#767676", high = "#FF5A5F") +
+    labs(title = "Scaled Feature Importance", x = "Feature", y = "Importance") +
+    theme_minimal() +
+    guides(fill = "none") +
+    scale_y_continuous(breaks = seq(0, 100, by = 5),
+                       labels = seq(0, 100, by = 5),) +
+    scale_x_discrete(limits = rownames(feature_importance)) +
+    coord_flip()
+}
+
+# store the final Random Forest model
+saveRDS(rf_final_model, file = "./airbnb_price_prediction/www/rf_model.rds")
+plot_feature_importance(rf_final_model)
+```
 
 ### Validation
 
+Finally, we validate the model using two techniques.
+
+#### Cross-validation
+
+We leverage a 5-fold cross-validation applied 30 times (which is the minimum sample size [accepted by the scientific community](https://pmc.ncbi.nlm.nih.gov/articles/PMC7745163/)) to compute afterwards the confidence interval for each of the three measured metrics. These intervals are narrow, so the model is fairly stable from one cross-validation repetition to another.
+
 ```{r cross_validation, warning=FALSE}
+# compute the confidence interval based on repeated cross-validation
 cv_control <- caret::trainControl(
   method = "repeatedcv",
   number = 5,
@@ -517,7 +555,40 @@ rf_cv_results <- caret::train(
   trControl = cv_control
 )
 
-pred_obs <- rf_cv_results$pred %>% dplyr::filter(str_sub(Resample, start=7, end=11) == "Rep01")
+# get the average metrics value for each repetition out of the 30
+agg_metrics <- subset(
+  rf_cv_results$resample %>%
+    mutate(Repetition = str_sub(Resample, start = 7)) %>%
+    group_by(Repetition) %>%
+    summarize(across(everything(), ~ mean(.x))),
+  select = -c(Resample)
+)
+
+cat(
+  paste(
+    "R^2 95% confidence interval:",
+    round(quantile(agg_metrics$Rsquared, 0.025), 2),
+    round(mean(agg_metrics$Rsquared), 2),
+    round(quantile(agg_metrics$Rsquared, 0.975), 2),
+    "\n",
+    "MAE 95% confidence interval:",
+    round(quantile(agg_metrics$MAE, 0.025), 2),
+    round(mean(agg_metrics$MAE), 2),
+    round(quantile(agg_metrics$MAE, 0.975), 2),
+    "\n",
+    " RMSE 95% confidence interval:",
+    round(quantile(agg_metrics$RMSE, 0.025), 2),
+    round(mean(agg_metrics$RMSE), 2),
+    round(quantile(agg_metrics$RMSE, 0.975), 2)
+  )
+)
+```
+
+For more insights, we plot the residuals obtained on the test folds over one cross-validation iteration. It can be seen that the model does not predict prices higher than 1,600 euros, even though the train data contains values up to 2,000. This occurs because values greater than the upper limit defined using the interquartile range are underrepresented. Additionally, the variance around the 0-axis appears to be increasing, meaning that for higher prices the model makes more mistakes. However, there are no visible patterns and the data appears to be randomly scattered around the horizontal 0 axis, which is a sign that the model has learned the data correctly.
+
+```{r plot_residuals}
+pred_obs <- rf_cv_results$pred %>%
+  dplyr::filter(str_sub(Resample, start = 7, end = 11) == "Rep01")
 
 ggplot(pred_obs, aes(
   x = pred,
@@ -528,43 +599,17 @@ ggplot(pred_obs, aes(
   labs(x = "Predicted value", y = "Residuals", title = "Residual plot computed on one iteration of CV") +
   theme_minimal() +
   theme(legend.position = "none")
-
-# get the average metrics value for each repetition out of the 500
-agg_metrics <- subset(rf_cv_results$resample %>%
-  mutate(Repetition = str_sub(Resample, start = 7)) %>%
-  group_by(Repetition) %>%
-   summarize(across(everything(), ~ mean(.x))), select=-c(Resample))
-
-cat(paste(
-    "R^2 95% confidence interval:",
-  round(quantile(agg_metrics$Rsquared, 0.025), 2),
-  round(mean(agg_metrics$Rsquared), 2),
-  round(quantile(agg_metrics$Rsquared, 0.975), 2),
-  "\n",
-  "MAE 95% confidence interval:",
-  round(quantile(agg_metrics$MAE, 0.025), 2),
-  round(mean(agg_metrics$MAE), 2),
-  round(quantile(agg_metrics$MAE, 0.975), 2),
-  "\n",
-  " RMSE 95% confidence interval:",
-  round(quantile(agg_metrics$RMSE, 0.025), 2),
-  round(mean(agg_metrics$RMSE), 2),
-  round(quantile(agg_metrics$RMSE, 0.975), 2)
-))
 ```
 
-```{r plot_MAE}
-ggplot(data = agg_metrics, aes(x = MAE, fill = "#FF5A5F")) +
-  geom_histogram() +
-  labs(title = "Histogram of the MAE for each cross-validation repetition", x = "MAE", y = "Frequency") +
-  theme(plot.margin = ggplot2::margin(20, 20, 20, 20), legend.position = "none")
-```
+#### Bootstrap validation
+
+For this validation technique we create 30 data samples and calculate the optimism-adjusted RMSE value. It can be seen that the value obtained is slightly lower than that obtained by using cross-validation, but quite similar. Therefore, we can conclude that the validation techniques lead to the same conclusion.
 
 ```{r bootstrap_validation}
 bootstap_validation <- function(data, index, all_features) {
   # get the bootstrap sample
   bootstrap_data <- data[index, ]
-  
+
   # train the model on the bootstrap data
   boot_rf_model <- randomForest(
     price ~ .,
@@ -572,29 +617,29 @@ bootstap_validation <- function(data, index, all_features) {
     mtry = best_rf_optimized$mtry,
     ntree = best_rf_optimized$ntree,
   )
-  
+
   # predict on the bootstrap dataset and compute the RMSE
   predictions <- predict(boot_rf_model, newdata = bootstrap_data)
   RMSE_b_bootstrap <- sqrt(mean((bootstrap_data$price - predictions) ^ 2))
-    
+
   # predict on the entire dataset and compute the RMSE
   predictions <- predict(boot_rf_model, newdata = data)
   RMSE_b_orig <- sqrt(mean((data$price - predictions) ^ 2))
-  
-  return (c(RMSE_b_bootstrap, RMSE_b_orig, RMSE_b_bootstrap - RMSE_b_orig))
+
+  return (c(
+    RMSE_b_bootstrap,
+    RMSE_b_orig,
+    RMSE_b_bootstrap - RMSE_b_orig
+  ))
 }
 
-boot_data <- boot(data, bootstap_validation, R=30)
-boot_data
-
-colnames(boot_data$t) <- c("RMSE_b_boot","RMSE_b_orig","RMSE_optimism")
+# compute the optimism-adjusted RMSE
+boot_data <- boot(data, bootstap_validation, R = 30)
+colnames(boot_data$t) <- c("RMSE_b_boot", "RMSE_b_orig", "RMSE_optimism")
 boot_validation_metrics <- colMeans(boot_data$t)
-
-RMSE - boot_validation_metrics[3]
+paste("Optimism-adjusted RMSE:",  round(RMSE - boot_validation_metrics[3], 2))
 ```
 
-### Reflection and future improvements
+### Conclusion and future improvements
 
-- summarize findings
-- remove outlier values
-- cleint view
+In conclusion, we found the **eigth most relevant features** for estimating the nightly rental price of an Airbnb in Amsterdam and trained and validated a **performant Random Forest** model that will be used in a Shiny application by owners who want to check the relationship between price and a possible satisfaction rating given by users for their property. As future improvements, similar analyses can be developed for other European cities and more complex models such as XGBoost tested.
