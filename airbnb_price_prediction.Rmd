@@ -352,7 +352,7 @@ ggplot(data, aes(x = bedrooms_no, y = price, fill = bedrooms_no)) +
   theme(legend.position = "none")
 ```
 
-Last but not least, the following map shows how the Airbnb price per night varies by location in Amsterdam.
+Last but not least, the following map shows how the Airbnb price per night varies by location in Amsterdam, darker shades of red represent higher prices.
 
 ```{r price_location_heatmap}
 leaflet() %>%
@@ -587,6 +587,9 @@ cat(
 For more insights, we plot the residuals obtained on the test folds over one cross-validation iteration. It can be seen that the model does not predict prices higher than 1,600 euros, even though the train data contains values up to 2,000. This occurs because values greater than the upper limit defined using the interquartile range are underrepresented. Additionally, the variance around the 0-axis appears to be increasing, meaning that for higher prices the model makes more mistakes. However, there are no visible patterns and the data appears to be randomly scattered around the horizontal 0 axis, which is a sign that the model has learned the data correctly.
 
 ```{r plot_residuals}
+# store the cross-validation results
+saveRDS(rf_cv_results, file = "./airbnb_price_prediction/www/rf_cv_results.rds")
+
 pred_obs <- rf_cv_results$pred %>%
   dplyr::filter(str_sub(Resample, start = 7, end = 11) == "Rep01")
 
@@ -643,3 +646,5 @@ paste("Optimism-adjusted RMSE:",  round(RMSE - boot_validation_metrics[3], 2))
 ### Conclusion and future improvements
 
 In conclusion, we found the **eigth most relevant features** for estimating the nightly rental price of an Airbnb in Amsterdam and trained and validated a **performant Random Forest** model that will be used in a Shiny application by owners who want to check the relationship between price and a possible satisfaction rating given by users for their property. As future improvements, similar analyses can be developed for other European cities and more complex models such as XGBoost tested.
+
+The Shiny application can be found [here](https://mihai-bogdan-bindila.shinyapps.io/airbnb-price-prediction/).
